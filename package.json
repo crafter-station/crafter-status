@@ -1,0 +1,35 @@
+{
+	"name": "@crafter/crafter-status",
+	"version": "0.1.0",
+	"description": "CLI to get status from WhatsApp groups via an LLM",
+	"module": "bin/crafter.ts",
+	"type": "module",
+	"license": "MIT",
+	"bin": {
+		"crafter": "bin/crafter.ts"
+	},
+	"scripts": {
+		"dev": "bun run bin/crafter.ts",
+		"build": "bun build ./bin/crafter.ts --target=bun --outdir=dist --external @aws-sdk/client-s3",
+		"compile": "bun build ./bin/crafter.ts --compile --outfile=dist/crafter --external @aws-sdk/client-s3",
+		"check": "bunx biome check .",
+		"typecheck": "bunx tsc --noEmit"
+	},
+	"dependencies": {
+		"@clack/prompts": "^1.1.0",
+		"commander": "^14.0.0",
+		"openai": "^4.77.0",
+		"picocolors": "^1.1.1",
+		"qrcode-terminal": "^0.12.0",
+		"whatsapp-web.js": "^1.27.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.2.0",
+		"@types/bun": "latest",
+		"@types/qrcode-terminal": "^0.12.2",
+		"typescript": "^5.6.0"
+	},
+	"engines": {
+		"bun": ">=1.2.0"
+	}
+}
