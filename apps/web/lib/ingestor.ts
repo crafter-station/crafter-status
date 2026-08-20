@@ -46,7 +46,7 @@ export const ingestor = {
 	refreshChannels: () =>
 		call<{ ok: boolean; count: number }>("/channels/refresh", { method: "POST" }),
 	backfill: (channelId: string) =>
-		call<{ ok: boolean; fetched: number; withinWindow: number; inserted: number }>(
+		call<{ ok: boolean; fetched: number; parsed: number; withinWindow: number; inserted: number }>(
 			`/channels/${encodeURIComponent(channelId)}/backfill`,
 			{
 				method: "POST",

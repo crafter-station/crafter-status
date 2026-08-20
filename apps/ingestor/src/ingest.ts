@@ -20,6 +20,21 @@ type RawMessage = {
 	quotedStanzaID?: string;
 };
 
+/** Flattened message as the page hands it back, with ids already serialized. */
+type PagedMessage = {
+	id: string | null;
+	from: string | null;
+	to: string | null;
+	author: string | null;
+	fromMe: boolean;
+	t: number | null;
+	body: string;
+	type: string;
+	hasMedia: boolean;
+	notifyName: string | null;
+	quotedStanzaID: string | null;
+};
+
 /**
  * Which group a message belongs to, without asking for a chat model.
  *
@@ -31,10 +46,6 @@ type RawMessage = {
 function channelIdOf(message: { from?: string; to?: string; fromMe?: boolean }): string | null {
 	const jid = message.fromMe ? message.to : message.from;
 	return jid?.endsWith("@g.us") ? jid : null;
-}
-
-function bodyOf(message: { body?: string; caption?: string }): string {
-	return message.body || message.caption || "";
 }
 
 /**
@@ -97,6 +108,8 @@ export async function ingestMessage(db: Database, message: WaMessage): Promise<v
 export type BackfillResult = {
 	/** Messages the store handed back at all. */
 	fetched: number;
+	/** Of those, how many could be read (the rest were unparseable). */
+	parsed: number;
 	/** Of those, how many fell inside the configured day window. */
 	withinWindow: number;
 	/** Of those, how many were new. */
@@ -132,11 +145,31 @@ export async function backfillChannel(
 			msgs.sort((a, b) => (a.t > b.t ? 1 : -1));
 			if (msgs.length > limit) msgs = msgs.slice(msgs.length - limit);
 
+			// Fields are read off the model directly rather than through
+			// WWebJS.getMessageModel(). That serializer pulls in WALinkify and other
+			// modules for link detection and button payloads we never look at, and if
+			// any of them fails to resolve it throws for every message at once — which
+			// is indistinguishable from a chat with no history.
+			const idOf = (v: any): string | null =>
+				typeof v === "string" ? v : (v?._serialized ?? null);
+
 			return msgs.map((m) => {
 				try {
-					return win.WWebJS.getMessageModel(m);
+					return {
+						id: idOf(m.id),
+						from: idOf(m.from),
+						to: idOf(m.to),
+						author: idOf(m.author),
+						fromMe: Boolean(m.id?.fromMe),
+						t: typeof m.t === "number" ? m.t : null,
+						body: m.body ?? m.caption ?? "",
+						type: m.type ?? "chat",
+						hasMedia: Boolean(m.mediaData || m.directPath),
+						notifyName: m.notifyName ?? null,
+						quotedStanzaID: m.quotedStanzaID ?? null,
+					};
 				} catch {
-					// One unserializable message must not cost us the rest of the history.
+					// One unreadable message must not cost us the rest of the history.
 					return null;
 				}
 			});
@@ -146,29 +179,33 @@ export async function backfillChannel(
 	);
 
 	const cutoff = Date.now() - settings.backfillDays * 24 * 60 * 60 * 1000;
+	const list = (raw ?? []) as (PagedMessage | null)[];
 	const rows: NewMessage[] = [];
+	let parsed = 0;
 
-	for (const m of (raw ?? []) as (RawMessage | null)[]) {
-		if (!m?.id?._serialized || typeof m.t !== "number") continue;
+	for (const m of list) {
+		if (!m?.id || typeof m.t !== "number") continue;
+		parsed++;
+
 		const timestamp = m.t * 1000;
 		if (timestamp < cutoff) continue;
 
 		rows.push({
-			id: m.id._serialized,
+			id: m.id,
 			channelId,
 			authorJid: m.author ?? m.from ?? null,
 			authorName: m.notifyName ?? null,
-			body: bodyOf(m),
+			body: m.body ?? "",
 			type: m.type ?? "chat",
 			hasMedia: Boolean(m.hasMedia),
 			timestamp: new Date(timestamp),
-			fromMe: Boolean(m.id.fromMe),
+			fromMe: Boolean(m.fromMe),
 			quotedMessageId: m.quotedStanzaID ?? null,
 		});
 	}
 
-	const fetched = (raw ?? []).length;
-	if (rows.length === 0) return { fetched, withinWindow: 0, inserted: 0 };
+	const fetched = list.length;
+	if (rows.length === 0) return { fetched, parsed, withinWindow: 0, inserted: 0 };
 
-	return { fetched, withinWindow: rows.length, inserted: await insertMessages(db, rows) };
+	return { fetched, parsed, withinWindow: rows.length, inserted: await insertMessages(db, rows) };
 }
