@@ -245,6 +245,16 @@ export class WhatsAppRunner {
 		const tracked = await listChannels(this.db, { trackedOnly: true });
 
 		for (const channel of tracked) {
+			// Written before the work, not after: without it a backfill that never
+			// returns is indistinguishable from one that never started.
+			await recordAudit(this.db, {
+				actorLabel: "ingestor",
+				action: "channel.backfill_started",
+				targetType: "channel",
+				targetId: channel.id,
+				metadata: { reason },
+			}).catch(() => {});
+
 			try {
 				const result = await backfillChannel(this.db, client, channel.id);
 				log.info(

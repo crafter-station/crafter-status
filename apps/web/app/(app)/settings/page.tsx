@@ -91,9 +91,22 @@ export default async function SettingsPage() {
 					</div>
 				) : null}
 
+				{session.status === "connecting" ? (
+					<p className="mt-3 rounded-md border border-[var(--border)] px-3 py-2 text-[0.8125rem] text-[var(--muted)]">
+						Connecting since {relativeTime(session.updatedAt)}. Loading WhatsApp Web and syncing the
+						chat list takes a few minutes on a large account — this is normal, and pressing
+						Reconnect will not make it faster.
+					</p>
+				) : null}
+
 				{isAdmin ? (
 					<div className="mt-4 flex flex-wrap gap-2">
-						<ActionButton action={pairWhatsApp} pendingLabel="Starting…" variant="default">
+						<ActionButton
+							action={pairWhatsApp}
+							pendingLabel="Starting…"
+							variant="default"
+							disabled={session.status === "connecting"}
+						>
 							{session.status === "connected" ? "Reconnect" : "Pair WhatsApp"}
 						</ActionButton>
 						<ActionButton action={refreshChannels} pendingLabel="Scanning…">

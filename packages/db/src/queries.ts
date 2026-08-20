@@ -151,8 +151,12 @@ export async function upsertChannels(
 		.onConflictDoUpdate({
 			target: channels.id,
 			set: {
-				name: sql`excluded.name`,
-				participantCount: sql`excluded.participant_count`,
+				// A chat that has not finished syncing reports its own JID as its name.
+				// Accepting that would replace "Crafter Station" with
+				// "1203...@g.us" on the next refresh, so a placeholder never wins over
+				// a name we already have.
+				name: sql`case when excluded.name = excluded.id then ${channels.name} else excluded.name end`,
+				participantCount: sql`greatest(excluded.participant_count, ${channels.participantCount})`,
 				updatedAt: new Date(),
 			},
 		});

@@ -105,6 +105,18 @@ export async function ingestMessage(db: Database, message: WaMessage): Promise<v
  * `getChatById()`, which builds the model that throws on damaged chats. Going
  * straight to the store skips that.
  */
+/** A page call that never settles would stall the reconnect path indefinitely. */
+const BACKFILL_TIMEOUT_MS = 90_000;
+
+function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+	return Promise.race([
+		work,
+		new Promise<never>((_, reject) =>
+			setTimeout(() => reject(new Error(`Timed out after ${ms / 1000}s ${what}`)), ms),
+		),
+	]);
+}
+
 export type BackfillResult = {
 	/** Messages the store handed back at all. */
 	fetched: number;
@@ -130,71 +142,95 @@ export async function backfillChannel(
 		}
 	).pupPage;
 
-	const raw = await page.evaluate(
-		async (chatId: string, limit: number) => {
-			const win = (globalThis as unknown as { window: Record<string, any> }).window;
-			const keep = (m: any) => !m.isNotification;
+	const raw = await withDeadline(
+		page.evaluate(
+			async (chatId: string, limit: number) => {
+				const win = (globalThis as unknown as { window: Record<string, any> }).window;
+				const keep = (m: any) => !m.isNotification;
 
-			const chat = await win.WWebJS.getChat(chatId, { getAsModel: false });
-			let msgs: any[] = chat.msgs.getModelsArray().filter(keep);
+				const chat = await win.WWebJS.getChat(chatId, { getAsModel: false });
+				let msgs: any[] = chat.msgs.getModelsArray().filter(keep);
 
-			while (msgs.length < limit) {
-				const earlier = await win.require("WAWebChatLoadMessages").loadEarlierMsgs({ chat });
-				if (!earlier || !earlier.length) break;
-				msgs = [...earlier.filter(keep), ...msgs];
-			}
-
-			msgs.sort((a, b) => (a.t > b.t ? 1 : -1));
-			if (msgs.length > limit) msgs = msgs.slice(msgs.length - limit);
-
-			// Fields are read off the model directly rather than through
-			// WWebJS.getMessageModel(). That serializer pulls in WALinkify and other
-			// modules for link detection and button payloads we never look at, and if
-			// any of them fails to resolve it throws for every message at once — which
-			// is indistinguishable from a chat with no history.
-			const idOf = (v: any): string | null =>
-				typeof v === "string" ? v : (v?._serialized ?? null);
-
-			// When nothing parses, report what the objects actually look like. Guessing
-			// field names has now cost three deploy cycles; the store can describe
-			// itself instead.
-			const first = msgs[0];
-			const sample = first
-				? {
-						keys: Object.keys(first).slice(0, 40),
-						proto: Object.getOwnPropertyNames(Object.getPrototypeOf(first) ?? {}).slice(0, 40),
-						idType: typeof first.id,
-						idSerialized: first?.id?._serialized ?? null,
-						tType: typeof first.t,
-						tValue: first?.t ?? null,
-					}
-				: null;
-
-			const mapped = msgs.map((m) => {
-				try {
-					return {
-						id: idOf(m.id),
-						from: idOf(m.from),
-						to: idOf(m.to),
-						author: idOf(m.author),
-						fromMe: Boolean(m.id?.fromMe),
-						t: typeof m.t === "number" ? m.t : null,
-						body: m.body ?? m.caption ?? "",
-						type: m.type ?? "chat",
-						hasMedia: Boolean(m.mediaData || m.directPath),
-						notifyName: m.notifyName ?? null,
-						quotedStanzaID: m.quotedStanzaID ?? null,
-					};
-				} catch {
-					// One unreadable message must not cost us the rest of the history.
-					return null;
+				// Bounded: each call is a round trip to WhatsApp, and an unbounded loop
+				// against a large group blocks the reconnect path with no way to observe it.
+				for (let page = 0; page < 40 && msgs.length < limit; page++) {
+					const earlier = await win.require("WAWebChatLoadMessages").loadEarlierMsgs({ chat });
+					if (!earlier || !earlier.length) break;
+					msgs = [...earlier.filter(keep), ...msgs];
 				}
-			});
 
-			return { mapped, sample };
-		},
-		channelId,
-		settings.backfillMessageLimit,
+				msgs.sort((a, b) => (a.t > b.t ? 1 : -1));
+				if (msgs.length > limit) msgs = msgs.slice(msgs.length - limit);
+
+				// Fields are read off the model directly rather than through
+				// WWebJS.getMessageModel(). That serializer pulls in WALinkify and other
+				// modules for link detection and button payloads we never look at, and if
+				// any of them fails to resolve it throws for every message at once — which
+				// is indistinguishable from a chat with no history.
+				// `_serialized` is synthesized by serialize(); the raw MsgKey and Wid objects
+				// do not carry it. Both define toString(), and MsgKey can be rebuilt from
+				// its parts if even that is missing.
+				const idOf = (v: any): string | null => {
+					if (!v) return null;
+					if (typeof v === "string") return v;
+					if (typeof v._serialized === "string") return v._serialized;
+
+					const asString = String(v);
+					if (asString && asString !== "[object Object]") return asString;
+
+					if (v.id && v.remote) {
+						const remote = idOf(v.remote);
+						const participant = v.participant ? `_${idOf(v.participant)}` : "";
+						return `${v.fromMe ? "true" : "false"}_${remote}_${v.id}${participant}`;
+					}
+					return null;
+				};
+
+				// When nothing parses, report what the objects actually look like. Guessing
+				// field names has now cost three deploy cycles; the store can describe
+				// itself instead.
+				const first = msgs[0];
+				const sample = first
+					? {
+							keys: Object.keys(first).slice(0, 40),
+							proto: Object.getOwnPropertyNames(Object.getPrototypeOf(first) ?? {}).slice(0, 40),
+							idType: typeof first.id,
+							idSerialized: first?.id?._serialized ?? null,
+							idString: String(first?.id ?? ""),
+							idKeys: Object.keys(first?.id ?? {}).slice(0, 15),
+							tType: typeof first.t,
+							tValue: first?.t ?? null,
+						}
+					: null;
+
+				const mapped = msgs.map((m) => {
+					try {
+						return {
+							id: idOf(m.id),
+							from: idOf(m.from),
+							to: idOf(m.to),
+							author: idOf(m.author),
+							fromMe: Boolean(m.id?.fromMe),
+							t: typeof m.t === "number" ? m.t : null,
+							body: m.body ?? m.caption ?? "",
+							type: m.type ?? "chat",
+							hasMedia: Boolean(m.mediaData || m.directPath),
+							notifyName: m.notifyName ?? null,
+							quotedStanzaID: m.quotedStanzaID ?? null,
+						};
+					} catch {
+						// One unreadable message must not cost us the rest of the history.
+						return null;
+					}
+				});
+
+				return { mapped, sample };
+			},
+			channelId,
+			settings.backfillMessageLimit,
+		),
+		BACKFILL_TIMEOUT_MS,
+		"reading history from WhatsApp",
 	);
 
 	const cutoff = Date.now() - settings.backfillDays * 24 * 60 * 60 * 1000;

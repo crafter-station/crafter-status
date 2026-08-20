@@ -11,6 +11,8 @@ type Props = {
 	variant?: "default" | "ghost" | "danger";
 	confirm?: string;
 	className?: string;
+	/** Held open by something already in progress; the click would be a no-op. */
+	disabled?: boolean;
 };
 
 /**
@@ -25,6 +27,7 @@ export function ActionButton({
 	variant = "ghost",
 	confirm,
 	className,
+	disabled = false,
 }: Props) {
 	const [pending, startTransition] = useTransition();
 	const [result, setResult] = useState<ActionResult | null>(null);
@@ -34,7 +37,7 @@ export function ActionButton({
 			<Button
 				type="button"
 				variant={variant}
-				disabled={pending}
+				disabled={pending || disabled}
 				className={className}
 				onClick={() => {
 					if (confirm && !window.confirm(confirm)) return;
