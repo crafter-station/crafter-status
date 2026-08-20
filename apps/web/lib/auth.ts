@@ -162,7 +162,10 @@ export async function resolveAccessForUser(userId: string): Promise<Access | nul
 		return {
 			userId,
 			isOrgMember: true,
-			role: existing.role,
+			// The allowlist is re-applied on every read rather than trusted from the
+			// cached row: a break-glass control that takes up to 24h to take effect is
+			// not a break-glass control.
+			role: isAdmin(existing.role === "admin", existing.githubLogin) ? "admin" : "member",
 			reason: "member",
 			githubLogin: existing.githubLogin,
 			name: existing.name,
