@@ -35,6 +35,7 @@ export class WhatsAppRunner {
 		if (this.client || this.starting) return;
 		this.starting = true;
 
+		clearStaleProfileLocks();
 		await updateSession(this.db, { status: "connecting", lastError: null });
 
 		const client = new Client({
@@ -193,6 +194,33 @@ export class WhatsAppRunner {
 			throw new Error("WhatsApp is not connected. Pair the account from the dashboard first.");
 		}
 		return this.client;
+	}
+}
+
+/**
+ * Chromium refuses to launch when the profile carries a lock naming another host:
+ *
+ *   The profile appears to be in use by another Chromium process (35) on another
+ *   computer (41d3a7ddd2a2).
+ *
+ * A container restart looks exactly like that — the profile lives on a persistent
+ * volume, so the lock from the previous container survives while its hostname and
+ * PID do not. The paired session itself is intact; only the lock is stale.
+ *
+ * Safe because exactly one replica of this worker ever runs, and it launches one
+ * browser. Any lock present before we start belongs to a process that no longer
+ * exists. These are symlinks, so `existsSync` is useless here (it follows the link
+ * and reports false for a dangling one) — `rmSync` with `force` handles all cases.
+ */
+function clearStaleProfileLocks(): void {
+	const profile = join(env.sessionDir, "session-crafter");
+
+	for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+		try {
+			rmSync(join(profile, name), { force: true, recursive: true });
+		} catch (e) {
+			log.warn(`could not clear ${name}: ${e instanceof Error ? e.message : String(e)}`);
+		}
 	}
 }
 
