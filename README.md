@@ -166,6 +166,13 @@ Two things to know if you rebuild this elsewhere:
 - **The web image builds with Node, not Bun.** Bun installs (it owns `bun.lock` and the
   workspace links), then Node builds and runs — `next build` under Bun fails loading Next's
   precompiled server runtime. The Dockerfile explains it in place.
+- **The ingestor must drive puppeteer's Chrome for Testing, not a distro `chromium`
+  package.** `whatsapp-web.js` is only tested against the bundled Chrome, and WhatsApp Web
+  serves different code to a different browser brand. With Debian chromium the client
+  connects and stays connected, but `getChats()` throws a minified `r` from inside
+  WhatsApp's own code — a failure that looks nothing like a browser problem and does not
+  reproduce on a developer machine. The Chrome version is pinned in the Dockerfile so the
+  container and a laptop drive the same build.
 
 `NEXT_PUBLIC_*` values are inlined at build time, so they are passed as build args as well as
 runtime env. Everything else is listed in [.env.example](.env.example); `INGESTOR_TOKEN` must
