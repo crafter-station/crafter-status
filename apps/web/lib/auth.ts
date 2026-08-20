@@ -5,6 +5,25 @@ import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 const GITHUB_ORG = process.env.GITHUB_ORG ?? "crafter-station";
+
+/**
+ * Explicit admin allowlist by GitHub login, comma-separated.
+ *
+ * Org *owner* is the normal route to admin, but that is only visible through the
+ * scoped membership call — so on an instance where that call is refused, nobody
+ * could ever become admin and nobody could pair WhatsApp. This is the bootstrap
+ * out of that deadlock, and a break-glass if the org roles ever disagree with who
+ * should be operating this.
+ */
+const ADMIN_LOGINS = (process.env.ADMIN_GITHUB_LOGINS ?? "")
+	.split(",")
+	.map((s) => s.trim().toLowerCase())
+	.filter(Boolean);
+
+function isAdmin(isOwner: boolean, login: string | null): boolean {
+	if (isOwner) return true;
+	return login !== null && ADMIN_LOGINS.includes(login.toLowerCase());
+}
 /** How long a *positive* membership verdict is trusted before we ask GitHub again. */
 const RECHECK_AFTER_MS = 24 * 60 * 60 * 1000;
 
@@ -51,12 +70,15 @@ type MembershipCheck = {
  * the Clerk GitHub connection requests the `read:org` scope. Without it GitHub
  * refuses to answer rather than answering "no".
  */
-async function checkGithubMembership(userId: string): Promise<MembershipCheck> {
+async function checkGithubMembership(
+	userId: string,
+	login: string | null,
+): Promise<MembershipCheck> {
 	const client = await clerkClient();
 	const tokens = await client.users.getUserOauthAccessToken(userId, "github");
 	const token = tokens.data[0]?.token;
 
-	if (!token) return { reason: "no_token", isOwner: false, login: null };
+	if (!token) return publicFallback(login, "no_token");
 
 	const response = await fetch(`https://api.github.com/user/memberships/orgs/${GITHUB_ORG}`, {
 		headers: {
@@ -69,19 +91,47 @@ async function checkGithubMembership(userId: string): Promise<MembershipCheck> {
 
 	// 403 means the token may not read org membership — almost always a missing
 	// `read:org` scope on the Clerk GitHub connection.
-	if (response.status === 403) return { reason: "scope_missing", isOwner: false, login: null };
-	if (response.status === 404) return { reason: "not_member", isOwner: false, login: null };
+	if (response.status === 403) return publicFallback(login, "scope_missing");
+	if (response.status === 404) return { reason: "not_member", isOwner: false, login };
 
-	if (!response.ok) {
-		return { reason: "github_error", isOwner: false, login: null };
-	}
+	if (!response.ok) return { reason: "github_error", isOwner: false, login };
 
 	const body = (await response.json()) as GithubMembership;
 	return {
 		reason: body.state === "active" ? "member" : "pending_invite",
 		isOwner: body.role === "admin",
-		login: body.user?.login ?? null,
+		login: body.user?.login ?? login,
 	};
+}
+
+/**
+ * When the scoped check is refused, fall back to the public members list, which
+ * needs no authentication at all.
+ *
+ * This can only ever *grant* access it could not otherwise prove: a public
+ * membership is a membership. It cannot see private members, so `read:org` remains
+ * the real fix — but it means a public member is not locked out of their own
+ * workspace waiting for a dashboard change. The original refusal reason is kept
+ * when the fallback finds nothing, so the page still points at the right fix.
+ */
+async function publicFallback(
+	login: string | null,
+	refusal: AccessReason,
+): Promise<MembershipCheck> {
+	if (!login) return { reason: refusal, isOwner: false, login };
+
+	try {
+		const response = await fetch(
+			`https://api.github.com/orgs/${GITHUB_ORG}/public_members/${encodeURIComponent(login)}`,
+			{ headers: { accept: "application/vnd.github+json" }, cache: "no-store" },
+		);
+		// 204 = public member. 404 = not public (may still be a private member).
+		if (response.status === 204) return { reason: "member", isOwner: false, login };
+	} catch {
+		// Fall through to the original refusal.
+	}
+
+	return { reason: refusal, isOwner: false, login };
 }
 
 export async function getAccess(): Promise<Access | null> {
@@ -122,10 +172,11 @@ export async function resolveAccessForUser(userId: string): Promise<Access | nul
 
 	const client = await clerkClient();
 	const clerkUser = await client.users.getUser(userId);
+	const githubAccount = clerkUser.externalAccounts.find((a) => a.provider === "oauth_github");
 
 	let membership: MembershipCheck;
 	try {
-		membership = await checkGithubMembership(userId);
+		membership = await checkGithubMembership(userId, githubAccount?.username ?? null);
 	} catch {
 		// GitHub being unreachable must not lock out an already-verified member;
 		// it only means we cannot refresh a stale verdict right now.
@@ -144,7 +195,6 @@ export async function resolveAccessForUser(userId: string): Promise<Access | nul
 	}
 
 	const isMember = membership.reason === "member";
-	const githubAccount = clerkUser.externalAccounts.find((a) => a.provider === "oauth_github");
 
 	const row = {
 		id: userId,
@@ -155,7 +205,9 @@ export async function resolveAccessForUser(userId: string): Promise<Access | nul
 			null,
 		email: clerkUser.primaryEmailAddress?.emailAddress ?? null,
 		avatarUrl: clerkUser.imageUrl ?? null,
-		role: (membership.isOwner ? "admin" : "member") as "admin" | "member",
+		role: (isAdmin(membership.isOwner, membership.login ?? githubAccount?.username ?? null)
+			? "admin"
+			: "member") as "admin" | "member",
 		isOrgMember: isMember,
 		// Left null on refusal so the next request re-checks rather than trusting a no.
 		orgCheckedAt: isMember ? new Date() : null,
