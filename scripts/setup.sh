@@ -206,7 +206,7 @@ printf '\n'
 pause "Got the callback URL? Press Enter to open GitHub."
 open_url "https://github.com/settings/developers"
 step "New OAuth App. Name it 'Crafter Status'."
-step "Homepage URL: your app URL (http://localhost:3000 is fine for now)."
+step "Homepage URL: https://wspstatus.crafter.run"
 step "Authorization callback URL: paste the one Clerk gave you."
 step "Register, then Generate a new client secret."
 printf '\n'
@@ -239,14 +239,17 @@ say "truth; this is only so tokens have a row to hang off."
 printf '\n'
 open_url "https://dashboard.clerk.com/~/webhooks"
 step "Add Endpoint."
-step "URL: <your app URL>/api/webhooks/clerk"
-note "  locally, expose port 3000 first (ngrok http 3000) and use that host."
+step "URL: https://wspstatus.crafter.run/api/webhooks/clerk"
 step "Subscribe to: user.created, user.updated, user.deleted"
 step "Create, then copy the Signing Secret (starts whsec_)."
 printf '\n'
 ask_secret CLERK_WEBHOOK_SIGNING_SECRET "Paste the signing secret:"
 if [[ -n "$CLERK_WEBHOOK_SIGNING_SECRET" ]]; then
   write_env CLERK_WEBHOOK_SIGNING_SECRET "$CLERK_WEBHOOK_SIGNING_SECRET"
+  printf '
+'
+  warn "this also has to be set on the deployed web service in Dokploy —"
+  warn "the .env here only covers local development"
 else
   SKIPPED+=("CLERK_WEBHOOK_SIGNING_SECRET (add it to .env when you create the webhook)")
   warn "skipped; the app runs without it, but the users table won't self-update"
@@ -270,18 +273,21 @@ pause
 
 # ── 5. Pair WhatsApp ──────────────────────────────────────────────────────
 stage "Pair WhatsApp"
-say "The last step needs your phone. Start both processes in separate terminals:"
-printf '\n'
-step "bun run ingestor"
-step "bun run web"
-printf '\n'
-say "Then, signed in as a crafter-station member:"
-step "Open http://localhost:3000/settings"
+say "The last step needs your phone, and it happens on the deployed dashboard."
+printf '
+'
+open_url "https://wspstatus.crafter.run/settings"
+step "Sign in with GitHub (you must be in the crafter-station org)."
 step "Press 'Pair WhatsApp' and wait for the QR to appear."
-step "On your phone: WhatsApp → Settings → Linked devices → Link a device."
+step "On your phone: WhatsApp -> Settings -> Linked devices -> Link a device."
 step "Scan it. The status badge flips to 'connected'."
 step "Press 'Refresh group list', then switch on the groups you want summarized."
-printf '\n'
+printf '
+'
+note "To run it locally instead: bun run ingestor and bun run web, then use"
+note "http://localhost:3000/settings."
+printf '
+'
 warn "Whichever account scans the QR is the account whose groups get mirrored,"
 warn "and whatsapp-web.js is against WhatsApp's terms — use a number you are"
 warn "willing to lose."
