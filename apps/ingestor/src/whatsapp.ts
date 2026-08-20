@@ -58,23 +58,35 @@ export class WhatsAppRunner {
 			await updateSession(this.db, { status: "disconnected", lastError: msg, qr: null });
 		});
 
+		// Everything in here is guarded: this is an async listener, so an escaping
+		// rejection is unhandled and takes the whole process down. A failure to read
+		// the chat list must not cost us the connection we just established.
 		client.on("ready", async () => {
-			log.info("ready");
-			const me = client.info?.wid?.user ?? null;
-			await updateSession(this.db, {
-				status: "connected",
-				qr: null,
-				qrGeneratedAt: null,
-				phoneNumber: me,
-				pushName: client.info?.pushname ?? null,
-				lastReadyAt: new Date(),
-				lastError: null,
-				heartbeatAt: new Date(),
-			});
-			await this.refreshChannels();
-			// Heal whatever we missed while disconnected. Upserts keyed on WhatsApp's
-			// own message id make an overlapping replay free.
-			await this.backfillTracked("reconnect");
+			try {
+				log.info("ready");
+				const me = client.info?.wid?.user ?? null;
+				await updateSession(this.db, {
+					status: "connected",
+					qr: null,
+					qrGeneratedAt: null,
+					phoneNumber: me,
+					pushName: client.info?.pushname ?? null,
+					lastReadyAt: new Date(),
+					lastError: null,
+					heartbeatAt: new Date(),
+				});
+			} catch (e) {
+				log.error(`ready bookkeeping failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+
+			try {
+				await this.refreshChannelsWithRetry();
+				// Heal whatever we missed while disconnected. Upserts keyed on WhatsApp's
+				// own message id make an overlapping replay free.
+				await this.backfillTracked("reconnect");
+			} catch (e) {
+				log.error(`post-ready sync failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
 		});
 
 		client.on("disconnected", async (reason: string) => {
@@ -161,6 +173,29 @@ export class WhatsAppRunner {
 		await upsertChannels(this.db, groups);
 		log.info(`catalog refreshed: ${groups.length} groups`);
 		return groups.length;
+	}
+
+	/**
+	 * Right after a first pairing WhatsApp Web has not finished syncing the chat
+	 * list, so `getChats()` legitimately returns nothing — or throws while the store
+	 * is still being populated. Retrying turns "you must press Refresh yourself,
+	 * and guess when" into something that just works.
+	 */
+	private async refreshChannelsWithRetry(attempts = 5, delayMs = 15_000): Promise<number> {
+		for (let attempt = 1; attempt <= attempts; attempt++) {
+			try {
+				const count = await this.refreshChannels();
+				if (count > 0) return count;
+				log.info(`catalog empty (attempt ${attempt}/${attempts}) — chat list still syncing`);
+			} catch (e) {
+				log.warn(
+					`catalog refresh failed (attempt ${attempt}/${attempts}): ${e instanceof Error ? e.message : String(e)}`,
+				);
+			}
+
+			if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delayMs));
+		}
+		return 0;
 	}
 
 	async backfillTracked(reason: string): Promise<void> {

@@ -29,6 +29,22 @@ if (sessionExists()) {
 	}
 }
 
+/**
+ * A long-running worker must not die from one bad call into a browser it does not
+ * control. whatsapp-web.js emits from async listeners all over, and a single
+ * escaping rejection would otherwise exit the process and take the control API and
+ * the scheduler with it — turning a transient WhatsApp hiccup into a crash loop.
+ */
+process.on("unhandledRejection", (reason) => {
+	log.error(
+		`unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
+	);
+});
+
+process.on("uncaughtException", (error) => {
+	log.error(`uncaught exception: ${error.stack ?? error.message}`);
+});
+
 async function shutdown(signal: string) {
 	log.info(`${signal} received — shutting down`);
 	scheduler.stop();
