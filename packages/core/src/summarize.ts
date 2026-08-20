@@ -86,7 +86,7 @@ export async function summarizeDay(opts: SummarizeOptions): Promise<SummaryResul
 	const raw = response.choices[0]?.message.content;
 	if (!raw) throw new Error("OpenAI returned an empty summary.");
 
-	const content = JSON.parse(raw) as SummaryContent;
+	const content = sanitize(JSON.parse(raw) as SummaryContent);
 
 	return {
 		...content,
@@ -95,6 +95,36 @@ export async function summarizeDay(opts: SummarizeOptions): Promise<SummaryResul
 		messageCount: messages.length,
 		promptTokens: response.usage?.prompt_tokens ?? 0,
 		completionTokens: response.usage?.completion_tokens ?? 0,
+	};
+}
+
+/**
+ * The schema allows null for `owner` and `due`, and the model sometimes fills
+ * those with the four-character string "null" instead. Rendered, that becomes a
+ * bold **null** next to an action item. Placeholder senders leak the same way:
+ * a participant list of ["unknown"] is worse than an empty one, because it reads
+ * as a fact about the conversation.
+ */
+function nullish(value: string | null | undefined): string | null {
+	if (value === null || value === undefined) return null;
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	return /^(null|none|n\/a|unknown|undefined)$/i.test(trimmed) ? null : trimmed;
+}
+
+function sanitize(content: SummaryContent): SummaryContent {
+	return {
+		...content,
+		actionItems: (content.actionItems ?? []).map((item) => ({
+			text: item.text,
+			owner: nullish(item.owner),
+			due: nullish(item.due),
+		})),
+		participants: (content.participants ?? [])
+			.map((p) => nullish(p))
+			.filter((p): p is string => p !== null),
+		decisions: (content.decisions ?? []).filter((d) => nullish(d) !== null),
+		openQuestions: (content.openQuestions ?? []).filter((q) => nullish(q) !== null),
 	};
 }
 

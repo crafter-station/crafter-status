@@ -50,7 +50,7 @@ export function buildSummarySystemPrompt(
 		`Day: ${day} (timezone ${timezone})`,
 		"",
 		"Rules:",
-		"1. Write in the dominant language of the transcript. If the group mixes Spanish and English, use whichever dominates that day.",
+		"1. Write EVERY field in the dominant language of the transcript — the tldr included, not only the lists. If the group mixes Spanish and English, use whichever dominates that day. Do not translate into English.",
 		"2. Report only what the transcript says. Never infer decisions, owners, or dates that were not stated.",
 		"3. `decisions` are things the group actually settled, not things merely discussed.",
 		"4. `actionItems` need an owner only when a person was clearly named; otherwise owner is null. Same for `due`.",
