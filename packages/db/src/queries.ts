@@ -246,6 +246,11 @@ export async function listActiveDays(
 	timezone: string,
 	limit = 60,
 ): Promise<{ day: string; messageCount: number }[]> {
+	// Grouped by ordinal, not by repeating the expression. Each interpolation of
+	// `timezone` emits its own bind parameter, and Postgres matches GROUP BY
+	// expressions syntactically — so `AT TIME ZONE $1` and `AT TIME ZONE $3` are
+	// different expressions to it, and the grouping never matches the projection:
+	//   column "messages.timestamp" must appear in the GROUP BY clause
 	const rows = await db
 		.select({
 			day: sql<string>`to_char((${messages.timestamp} AT TIME ZONE ${timezone})::date, 'YYYY-MM-DD')`,
@@ -253,8 +258,8 @@ export async function listActiveDays(
 		})
 		.from(messages)
 		.where(eq(messages.channelId, channelId))
-		.groupBy(sql`(${messages.timestamp} AT TIME ZONE ${timezone})::date`)
-		.orderBy(sql`(${messages.timestamp} AT TIME ZONE ${timezone})::date desc`)
+		.groupBy(sql`1`)
+		.orderBy(sql`1 desc`)
 		.limit(limit);
 	return rows;
 }
