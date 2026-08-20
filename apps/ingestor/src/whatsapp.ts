@@ -233,19 +233,41 @@ export class WhatsAppRunner {
 		return 0;
 	}
 
+	/**
+	 * Outcomes are written to the audit log, not just to stdout. Container logs on
+	 * this platform are not reachable from anywhere the rest of the system can see,
+	 * and a backfill that quietly stores nothing is indistinguishable from a channel
+	 * with no history — which has now cost two round trips to diagnose.
+	 */
 	async backfillTracked(reason: string): Promise<void> {
 		const client = this.requireClient();
-		const { listChannels } = await import("@crafter/db");
+		const { listChannels, recordAudit } = await import("@crafter/db");
 		const tracked = await listChannels(this.db, { trackedOnly: true });
 
 		for (const channel of tracked) {
 			try {
-				const n = await backfillChannel(this.db, client, channel.id);
-				if (n > 0) log.info(`backfill (${reason}) ${channel.name}: +${n} messages`);
-			} catch (e) {
-				log.error(
-					`backfill failed for ${channel.name}: ${e instanceof Error ? e.message : String(e)}`,
+				const result = await backfillChannel(this.db, client, channel.id);
+				log.info(
+					`backfill (${reason}) ${channel.name}: fetched ${result.fetched}, in window ${result.withinWindow}, inserted ${result.inserted}`,
 				);
+				await recordAudit(this.db, {
+					actorLabel: "ingestor",
+					action: "channel.backfill",
+					targetType: "channel",
+					targetId: channel.id,
+					metadata: { reason, ...result },
+				});
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				const stack = e instanceof Error ? (e.stack ?? "") : "";
+				log.error(`backfill failed for ${channel.name}: ${message}`);
+				await recordAudit(this.db, {
+					actorLabel: "ingestor",
+					action: "channel.backfill_failed",
+					targetType: "channel",
+					targetId: channel.id,
+					metadata: { reason, error: message, stack: stack.slice(0, 1500) },
+				}).catch(() => {});
 			}
 		}
 	}

@@ -145,8 +145,8 @@ async function route(
 	const backfill = pathname.match(/^\/channels\/([^/]+)\/backfill$/);
 	if (backfill?.[1] && req.method === "POST") {
 		const channelId = decodeURIComponent(backfill[1]);
-		const inserted = await backfillChannel(db, whatsapp.requireClient(), channelId);
-		return json({ ok: true, inserted });
+		const result = await backfillChannel(db, whatsapp.requireClient(), channelId);
+		return json({ ok: true, ...result });
 	}
 
 	if (pathname === "/summaries/regenerate" && req.method === "POST") {

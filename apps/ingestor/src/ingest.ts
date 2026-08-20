@@ -94,11 +94,20 @@ export async function ingestMessage(db: Database, message: WaMessage): Promise<v
  * `getChatById()`, which builds the model that throws on damaged chats. Going
  * straight to the store skips that.
  */
+export type BackfillResult = {
+	/** Messages the store handed back at all. */
+	fetched: number;
+	/** Of those, how many fell inside the configured day window. */
+	withinWindow: number;
+	/** Of those, how many were new. */
+	inserted: number;
+};
+
 export async function backfillChannel(
 	db: Database,
 	client: WhatsAppClient,
 	channelId: string,
-): Promise<number> {
+): Promise<BackfillResult> {
 	const settings = await getSettings(db);
 	const page = (
 		client as unknown as {
@@ -158,6 +167,8 @@ export async function backfillChannel(
 		});
 	}
 
-	if (rows.length === 0) return 0;
-	return insertMessages(db, rows);
+	const fetched = (raw ?? []).length;
+	if (rows.length === 0) return { fetched, withinWindow: 0, inserted: 0 };
+
+	return { fetched, withinWindow: rows.length, inserted: await insertMessages(db, rows) };
 }

@@ -97,12 +97,15 @@ export async function setChannelTracked(
 
 		if (tracked) {
 			try {
-				const { inserted } = await ingestor.backfill(channelId);
+				const { inserted, fetched, withinWindow } = await ingestor.backfill(channelId);
 				await db
 					.update(channels)
 					.set({ backfilledAt: new Date() })
 					.where(eq(channels.id, channelId));
-				message = `Channel enabled — backfilled ${inserted} messages.`;
+				message =
+					inserted > 0
+						? `Channel enabled — backfilled ${inserted} messages.`
+						: `Channel enabled, but nothing was stored: WhatsApp returned ${fetched} messages, ${withinWindow} inside the ${"30"}-day window.`;
 			} catch (e) {
 				message = `Channel enabled, but backfill failed: ${e instanceof Error ? e.message : String(e)}`;
 			}
