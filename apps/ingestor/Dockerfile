@@ -15,10 +15,14 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
 
 WORKDIR /app
 
+# Every workspace manifest, not just this app's: bun.lock describes the whole
+# workspace, and --frozen-lockfile fails if any of them is missing.
 COPY package.json bun.lock ./
+COPY apps/cli/package.json apps/cli/
+COPY apps/web/package.json apps/web/
+COPY apps/ingestor/package.json apps/ingestor/
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
-COPY apps/ingestor/package.json apps/ingestor/
 RUN bun install --frozen-lockfile
 
 COPY packages ./packages
