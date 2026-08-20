@@ -66,6 +66,63 @@ async function route(
 		return json({ session, workerConnected: whatsapp.isReady });
 	}
 
+	// Fixed probe into the page, to locate a failure that only ever surfaces as a
+	// minified identifier. getChats() is require -> getModelsArray -> getChatModel
+	// per chat, and a bare "r" says nothing about which of the three threw.
+	if (pathname === "/diagnostics" && req.method === "GET") {
+		const client = whatsapp.requireClient() as unknown as {
+			pupPage: { evaluate: (fn: () => unknown) => Promise<unknown> };
+		};
+		const probe = await client.pupPage.evaluate(async () => {
+			// This function is serialized and run inside the browser page, where
+			// `window` exists; the worker itself has no DOM types.
+			const win = (globalThis as unknown as { window: Record<string, any> }).window;
+			const out: Record<string, unknown> = {};
+			const describe = (e: any) =>
+				`${e?.constructor?.name ?? "?"}: ${e?.message ?? String(e)} :: ${String(e?.stack ?? "").slice(0, 200)}`;
+
+			out.hasRequire = typeof win.require === "function";
+			out.hasWWebJS = typeof win.WWebJS === "object";
+			out.hasStore = typeof win.Store === "object";
+
+			let chats: any[] | null = null;
+			try {
+				const collections = win.require("WAWebCollections");
+				out.collectionKeys = Object.keys(collections).slice(0, 25);
+				chats = collections.Chat.getModelsArray();
+				out.chatCount = chats?.length ?? null;
+				out.groupCount = chats?.filter((c: any) => c?.id?.server === "g.us").length ?? null;
+			} catch (e) {
+				out.collectionsError = describe(e);
+			}
+
+			if (chats?.length) {
+				try {
+					await win.WWebJS.getChatModel(chats[0]);
+					out.firstChatModel = "ok";
+				} catch (e) {
+					out.firstChatModelError = describe(e);
+				}
+
+				let failures = 0;
+				let sample = "";
+				for (const chat of chats) {
+					try {
+						await win.WWebJS.getChatModel(chat);
+					} catch (e) {
+						failures++;
+						if (!sample) sample = `${chat?.id?._serialized ?? "?"} -> ${describe(e)}`;
+					}
+				}
+				out.modelFailures = failures;
+				out.modelFailureSample = sample;
+			}
+
+			return out;
+		});
+		return json(probe);
+	}
+
 	if (pathname === "/pair" && req.method === "POST") {
 		// Fire and forget: initialize() resolves only once WhatsApp is ready, which
 		// is after the user scans. The dashboard polls the session row for the QR.
