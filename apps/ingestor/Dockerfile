@@ -17,7 +17,7 @@ WORKDIR /app
 
 # Every workspace manifest, not just this app's: bun.lock describes the whole
 # workspace, and --frozen-lockfile fails if any of them is missing.
-COPY package.json bun.lock ./
+COPY package.json bun.lock tsconfig.base.json ./
 COPY apps/cli/package.json apps/cli/
 COPY apps/web/package.json apps/web/
 COPY apps/ingestor/package.json apps/ingestor/
