@@ -167,18 +167,43 @@ export class WhatsAppRunner {
 	 * not start persisting its messages.
 	 */
 	async refreshChannels(): Promise<number> {
-		const client = this.requireClient();
-		const chats = await client.getChats();
-		const groups = chats
-			.filter((c) => c.isGroup)
-			.map((c) => {
-				const group = c as typeof c & { participants?: unknown[] };
-				return {
-					id: c.id._serialized,
-					name: c.name,
-					participantCount: Array.isArray(group.participants) ? group.participants.length : 0,
-				};
-			});
+		const client = this.requireClient() as unknown as {
+			pupPage: { evaluate: <T>(fn: () => T) => Promise<T> };
+		};
+
+		// Deliberately not client.getChats(). That builds a full model for every chat
+		// with Promise.all, so a single unreadable chat rejects the whole call — on
+		// this account 25 of 544 chats throw
+		//   DataError: Failed to execute 'get' on 'IDBObjectStore'
+		// from WhatsApp's own IndexedDB layer, and the other 188 groups became
+		// invisible because of them. Which chats are damaged depends on the profile,
+		// which is why the same code lists groups fine on another machine.
+		//
+		// The catalogue needs three fields, all present on the model itself, so this
+		// reads them directly and skips whatever it cannot parse.
+		const groups = await client.pupPage.evaluate(() => {
+			const win = (globalThis as unknown as { window: Record<string, any> }).window;
+			const chats: any[] = win.require("WAWebCollections").Chat.getModelsArray();
+			const out: { id: string; name: string; participantCount: number }[] = [];
+
+			for (const chat of chats) {
+				try {
+					if (chat?.id?.server !== "g.us") continue;
+					const id: string | undefined = chat.id._serialized;
+					if (!id) continue;
+
+					out.push({
+						id,
+						name: chat.name ?? chat.formattedTitle ?? chat.contact?.name ?? id,
+						participantCount: chat.groupMetadata?.participants?.length ?? 0,
+					});
+				} catch {
+					// One unreadable chat must not cost us the rest of the catalogue.
+				}
+			}
+
+			return out;
+		});
 
 		await upsertChannels(this.db, groups);
 		log.info(`catalog refreshed: ${groups.length} groups`);
