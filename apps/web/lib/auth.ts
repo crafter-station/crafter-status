@@ -5,13 +5,29 @@ import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 const GITHUB_ORG = process.env.GITHUB_ORG ?? "crafter-station";
-/** How long a membership verdict is trusted before we ask GitHub again. */
+/** How long a *positive* membership verdict is trusted before we ask GitHub again. */
 const RECHECK_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Why access was granted or refused. `scope_missing` is deliberately distinct from
+ * `not_member`: GitHub answers 403 when the token is not allowed to read org
+ * membership at all, which is a configuration problem on our side and says nothing
+ * about whether the person is in the organization. Collapsing the two sends people
+ * off to fix their GitHub account when the fix is in the Clerk dashboard.
+ */
+export type AccessReason =
+	| "member"
+	| "not_member"
+	| "pending_invite"
+	| "scope_missing"
+	| "no_token"
+	| "github_error";
 
 export type Access = {
 	userId: string;
 	isOrgMember: boolean;
 	role: "admin" | "member";
+	reason: AccessReason;
 	githubLogin: string | null;
 	name: string | null;
 	avatarUrl: string | null;
@@ -23,20 +39,24 @@ type GithubMembership = {
 	user?: { login?: string };
 };
 
+type MembershipCheck = {
+	reason: AccessReason;
+	isOwner: boolean;
+	login: string | null;
+};
+
 /**
  * Ask GitHub whether this user is in the org, using the user's own OAuth token.
- * `GET /user/memberships/orgs/{org}` reports private memberships too, as long as
- * the Clerk GitHub connection requests the `read:org` scope — so no org-owned
- * GitHub App or PAT is needed.
+ * `GET /user/memberships/orgs/{org}` reports private memberships too — but only if
+ * the Clerk GitHub connection requests the `read:org` scope. Without it GitHub
+ * refuses to answer rather than answering "no".
  */
-async function checkGithubMembership(
-	userId: string,
-): Promise<{ isMember: boolean; isOwner: boolean; login: string | null }> {
+async function checkGithubMembership(userId: string): Promise<MembershipCheck> {
 	const client = await clerkClient();
 	const tokens = await client.users.getUserOauthAccessToken(userId, "github");
 	const token = tokens.data[0]?.token;
 
-	if (!token) return { isMember: false, isOwner: false, login: null };
+	if (!token) return { reason: "no_token", isOwner: false, login: null };
 
 	const response = await fetch(`https://api.github.com/user/memberships/orgs/${GITHUB_ORG}`, {
 		headers: {
@@ -47,26 +67,23 @@ async function checkGithubMembership(
 		cache: "no-store",
 	});
 
-	if (response.status === 404 || response.status === 403) {
-		return { isMember: false, isOwner: false, login: null };
-	}
+	// 403 means the token may not read org membership — almost always a missing
+	// `read:org` scope on the Clerk GitHub connection.
+	if (response.status === 403) return { reason: "scope_missing", isOwner: false, login: null };
+	if (response.status === 404) return { reason: "not_member", isOwner: false, login: null };
+
 	if (!response.ok) {
-		throw new Error(`GitHub membership check failed: ${response.status} ${await response.text()}`);
+		return { reason: "github_error", isOwner: false, login: null };
 	}
 
 	const body = (await response.json()) as GithubMembership;
 	return {
-		isMember: body.state === "active",
+		reason: body.state === "active" ? "member" : "pending_invite",
 		isOwner: body.role === "admin",
 		login: body.user?.login ?? null,
 	};
 }
 
-/**
- * Resolve the signed-in user's access, re-verifying against GitHub at most once a
- * day. Someone who leaves the org loses access within 24h without us hitting the
- * GitHub API on every page load.
- */
 export async function getAccess(): Promise<Access | null> {
 	const { userId } = await auth();
 	if (!userId) return null;
@@ -77,18 +94,26 @@ export async function getAccess(): Promise<Access | null> {
  * Same verdict, resolved from a bare Clerk user id rather than a browser session.
  * The MCP endpoint needs this: a client that authenticated over OAuth may never
  * have loaded the dashboard, so there may be no `users` row to read yet.
+ *
+ * Only *granted* access is cached. A refusal is re-checked on every request, so
+ * fixing the cause — being added to the org, or the `read:org` scope being
+ * configured — takes effect on the next page load instead of in up to 24 hours.
  */
 export async function resolveAccessForUser(userId: string): Promise<Access | null> {
 	const db = getDb();
 	const [existing] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
 
-	const fresh =
-		existing?.orgCheckedAt && Date.now() - existing.orgCheckedAt.getTime() < RECHECK_AFTER_MS;
-	if (existing && fresh) {
+	const cachedAndFresh =
+		existing?.isOrgMember &&
+		existing.orgCheckedAt &&
+		Date.now() - existing.orgCheckedAt.getTime() < RECHECK_AFTER_MS;
+
+	if (existing && cachedAndFresh) {
 		return {
 			userId,
-			isOrgMember: existing.isOrgMember,
+			isOrgMember: true,
 			role: existing.role,
+			reason: "member",
 			githubLogin: existing.githubLogin,
 			name: existing.name,
 			avatarUrl: existing.avatarUrl,
@@ -98,26 +123,29 @@ export async function resolveAccessForUser(userId: string): Promise<Access | nul
 	const client = await clerkClient();
 	const clerkUser = await client.users.getUser(userId);
 
-	let membership: { isMember: boolean; isOwner: boolean; login: string | null };
+	let membership: MembershipCheck;
 	try {
 		membership = await checkGithubMembership(userId);
 	} catch {
 		// GitHub being unreachable must not lock out an already-verified member;
-		// it only means we cannot upgrade a stale verdict right now.
-		if (existing) {
+		// it only means we cannot refresh a stale verdict right now.
+		if (existing?.isOrgMember) {
 			return {
 				userId,
-				isOrgMember: existing.isOrgMember,
+				isOrgMember: true,
 				role: existing.role,
+				reason: "member",
 				githubLogin: existing.githubLogin,
 				name: existing.name,
 				avatarUrl: existing.avatarUrl,
 			};
 		}
-		membership = { isMember: false, isOwner: false, login: null };
+		membership = { reason: "github_error", isOwner: false, login: null };
 	}
 
+	const isMember = membership.reason === "member";
 	const githubAccount = clerkUser.externalAccounts.find((a) => a.provider === "oauth_github");
+
 	const row = {
 		id: userId,
 		githubLogin: membership.login ?? githubAccount?.username ?? null,
@@ -128,8 +156,9 @@ export async function resolveAccessForUser(userId: string): Promise<Access | nul
 		email: clerkUser.primaryEmailAddress?.emailAddress ?? null,
 		avatarUrl: clerkUser.imageUrl ?? null,
 		role: (membership.isOwner ? "admin" : "member") as "admin" | "member",
-		isOrgMember: membership.isMember,
-		orgCheckedAt: new Date(),
+		isOrgMember: isMember,
+		// Left null on refusal so the next request re-checks rather than trusting a no.
+		orgCheckedAt: isMember ? new Date() : null,
 		updatedAt: new Date(),
 	};
 
@@ -137,8 +166,9 @@ export async function resolveAccessForUser(userId: string): Promise<Access | nul
 
 	return {
 		userId,
-		isOrgMember: row.isOrgMember,
+		isOrgMember: isMember,
 		role: row.role,
+		reason: membership.reason,
 		githubLogin: row.githubLogin,
 		name: row.name,
 		avatarUrl: row.avatarUrl,
