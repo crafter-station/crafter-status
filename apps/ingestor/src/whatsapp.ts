@@ -3,11 +3,15 @@ import { join } from "node:path";
 import type { Database } from "@crafter/db";
 import { updateSession, upsertChannels } from "@crafter/db";
 import wwebjs from "whatsapp-web.js";
+import { withDeadline } from "./deadline.ts";
 import { env } from "./env.ts";
 import { backfillChannel, ingestMessage } from "./ingest.ts";
 import { log } from "./log.ts";
 
 const { Client, LocalAuth } = wwebjs;
+
+/** Reading 500+ chats is not instant, but it is not minutes either. */
+const CATALOG_TIMEOUT_MS = 60_000;
 
 export type WhatsAppClient = InstanceType<typeof Client>;
 
@@ -53,6 +57,9 @@ export class WhatsAppRunner {
 			puppeteer: {
 				headless: env.headless,
 				args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+				// Default is 180s. A worker that must stay responsive cannot wait three
+				// minutes to learn a single page call is not coming back.
+				protocolTimeout: 75_000,
 			},
 		});
 
@@ -89,13 +96,21 @@ export class WhatsAppRunner {
 				log.error(`ready bookkeeping failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
 
+			// Catalogue and backfill are independent, and are guarded separately.
+			// Chaining them meant a stalled chat-list read silently prevented every
+			// tracked channel from ever being backfilled.
 			try {
 				await this.refreshChannelsWithRetry();
+			} catch (e) {
+				log.error(`catalog refresh failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+
+			try {
 				// Heal whatever we missed while disconnected. Upserts keyed on WhatsApp's
 				// own message id make an overlapping replay free.
 				await this.backfillTracked("reconnect");
 			} catch (e) {
-				log.error(`post-ready sync failed: ${e instanceof Error ? e.message : String(e)}`);
+				log.error(`backfill failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
 		});
 
@@ -181,29 +196,33 @@ export class WhatsAppRunner {
 		//
 		// The catalogue needs three fields, all present on the model itself, so this
 		// reads them directly and skips whatever it cannot parse.
-		const groups = await client.pupPage.evaluate(() => {
-			const win = (globalThis as unknown as { window: Record<string, any> }).window;
-			const chats: any[] = win.require("WAWebCollections").Chat.getModelsArray();
-			const out: { id: string; name: string; participantCount: number }[] = [];
+		const groups = await withDeadline(
+			client.pupPage.evaluate(() => {
+				const win = (globalThis as unknown as { window: Record<string, any> }).window;
+				const chats: any[] = win.require("WAWebCollections").Chat.getModelsArray();
+				const out: { id: string; name: string; participantCount: number }[] = [];
 
-			for (const chat of chats) {
-				try {
-					if (chat?.id?.server !== "g.us") continue;
-					const id: string | undefined = chat.id._serialized;
-					if (!id) continue;
+				for (const chat of chats) {
+					try {
+						if (chat?.id?.server !== "g.us") continue;
+						const id: string | undefined = chat.id._serialized;
+						if (!id) continue;
 
-					out.push({
-						id,
-						name: chat.name ?? chat.formattedTitle ?? chat.contact?.name ?? id,
-						participantCount: chat.groupMetadata?.participants?.length ?? 0,
-					});
-				} catch {
-					// One unreadable chat must not cost us the rest of the catalogue.
+						out.push({
+							id,
+							name: chat.name ?? chat.formattedTitle ?? chat.contact?.name ?? id,
+							participantCount: chat.groupMetadata?.participants?.length ?? 0,
+						});
+					} catch {
+						// One unreadable chat must not cost us the rest of the catalogue.
+					}
 				}
-			}
 
-			return out;
-		});
+				return out;
+			}),
+			CATALOG_TIMEOUT_MS,
+			"reading the chat list from WhatsApp",
+		);
 
 		await upsertChannels(this.db, groups);
 		log.info(`catalog refreshed: ${groups.length} groups`);
@@ -216,7 +235,7 @@ export class WhatsAppRunner {
 	 * is still being populated. Retrying turns "you must press Refresh yourself,
 	 * and guess when" into something that just works.
 	 */
-	private async refreshChannelsWithRetry(attempts = 5, delayMs = 15_000): Promise<number> {
+	private async refreshChannelsWithRetry(attempts = 3, delayMs = 10_000): Promise<number> {
 		for (let attempt = 1; attempt <= attempts; attempt++) {
 			try {
 				const count = await this.refreshChannels();

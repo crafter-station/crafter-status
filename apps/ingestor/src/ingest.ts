@@ -1,6 +1,7 @@
 import type { Database, NewMessage } from "@crafter/db";
 import { getChannel, getSettings, insertMessages, upsertChannels } from "@crafter/db";
 import type wwebjs from "whatsapp-web.js";
+import { withDeadline } from "./deadline.ts";
 import type { WhatsAppClient } from "./whatsapp.ts";
 
 type WaMessage = wwebjs.Message;
@@ -107,15 +108,6 @@ export async function ingestMessage(db: Database, message: WaMessage): Promise<v
  */
 /** A page call that never settles would stall the reconnect path indefinitely. */
 const BACKFILL_TIMEOUT_MS = 90_000;
-
-function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
-	return Promise.race([
-		work,
-		new Promise<never>((_, reject) =>
-			setTimeout(() => reject(new Error(`Timed out after ${ms / 1000}s ${what}`)), ms),
-		),
-	]);
-}
 
 export type BackfillResult = {
 	/** Messages the store handed back at all. */
