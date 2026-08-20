@@ -216,7 +216,28 @@ export async function backfillChannel(
 					}
 				});
 
-				return { mapped, sample };
+				// notifyName only travels with live messages; on history it is empty, which
+				// would leave every summary attributing decisions and action items to
+				// nobody. Names are resolved once per sender from the contact store.
+				const names: Record<string, string> = {};
+				for (const m of mapped) {
+					const jid = m?.author ?? m?.from;
+					if (!jid || names[jid]) continue;
+					try {
+						const contact = win.require("WAWebCollections").Contact.get(jid);
+						const name =
+							contact?.name ??
+							contact?.pushname ??
+							contact?.verifiedName ??
+							contact?.formattedName ??
+							null;
+						if (name) names[jid] = name;
+					} catch {
+						// A sender we cannot name is still a message worth keeping.
+					}
+				}
+
+				return { mapped, sample, names };
 			},
 			channelId,
 			settings.backfillMessageLimit,
@@ -226,10 +247,12 @@ export async function backfillChannel(
 	);
 
 	const cutoff = Date.now() - settings.backfillDays * 24 * 60 * 60 * 1000;
-	const payload = (raw ?? { mapped: [], sample: null }) as {
+	const payload = (raw ?? { mapped: [], sample: null, names: {} }) as {
 		mapped: (PagedMessage | null)[];
 		sample: unknown;
+		names: Record<string, string>;
 	};
+	const names = payload.names ?? {};
 	const list = payload.mapped ?? [];
 	const rows: NewMessage[] = [];
 	let parsed = 0;
@@ -245,7 +268,7 @@ export async function backfillChannel(
 			id: m.id,
 			channelId,
 			authorJid: m.author ?? m.from ?? null,
-			authorName: m.notifyName ?? null,
+			authorName: m.notifyName ?? names[m.author ?? m.from ?? ""] ?? null,
 			body: m.body ?? "",
 			type: m.type ?? "chat",
 			hasMedia: Boolean(m.hasMedia),

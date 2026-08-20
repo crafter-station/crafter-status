@@ -173,9 +173,22 @@ export async function insertMessages(db: Database, rows: NewMessage[]): Promise<
 	const inserted = await db
 		.insert(messages)
 		.values(rows)
-		.onConflictDoNothing({ target: messages.id })
+		// Not DoNothing: a replay may carry a sender name the first pass could not
+		// resolve, and attribution is what makes a summary useful. Everything else
+		// about a sent message is immutable, so only the name is allowed to fill in.
+		.onConflictDoUpdate({
+			target: messages.id,
+			set: {
+				authorName: sql`coalesce(${messages.authorName}, excluded.author_name)`,
+			},
+			setWhere: sql`${messages.authorName} is null`,
+		})
+		// RETURNING now includes rows that were updated rather than inserted, so the
+		// count would silently inflate on every replay. xmax is zero only for a true
+		// insert, which keeps "inserted" meaning what it says.
 		.returning({
 			id: messages.id,
+			isNew: sql<boolean>`(xmax = 0)`,
 		});
 
 	const latest = rows.reduce<Date | null>((acc, r) => {
@@ -200,7 +213,7 @@ export async function insertMessages(db: Database, rows: NewMessage[]): Promise<
 			);
 	}
 
-	return inserted.length;
+	return inserted.filter((r) => r.isNew).length;
 }
 
 export async function getMessagesForDay(
