@@ -114,6 +114,8 @@ export type BackfillResult = {
 	withinWindow: number;
 	/** Of those, how many were new. */
 	inserted: number;
+	/** Shape of the first message, reported only when nothing could be parsed. */
+	sample?: unknown;
 };
 
 export async function backfillChannel(
@@ -153,7 +155,22 @@ export async function backfillChannel(
 			const idOf = (v: any): string | null =>
 				typeof v === "string" ? v : (v?._serialized ?? null);
 
-			return msgs.map((m) => {
+			// When nothing parses, report what the objects actually look like. Guessing
+			// field names has now cost three deploy cycles; the store can describe
+			// itself instead.
+			const first = msgs[0];
+			const sample = first
+				? {
+						keys: Object.keys(first).slice(0, 40),
+						proto: Object.getOwnPropertyNames(Object.getPrototypeOf(first) ?? {}).slice(0, 40),
+						idType: typeof first.id,
+						idSerialized: first?.id?._serialized ?? null,
+						tType: typeof first.t,
+						tValue: first?.t ?? null,
+					}
+				: null;
+
+			const mapped = msgs.map((m) => {
 				try {
 					return {
 						id: idOf(m.id),
@@ -173,13 +190,19 @@ export async function backfillChannel(
 					return null;
 				}
 			});
+
+			return { mapped, sample };
 		},
 		channelId,
 		settings.backfillMessageLimit,
 	);
 
 	const cutoff = Date.now() - settings.backfillDays * 24 * 60 * 60 * 1000;
-	const list = (raw ?? []) as (PagedMessage | null)[];
+	const payload = (raw ?? { mapped: [], sample: null }) as {
+		mapped: (PagedMessage | null)[];
+		sample: unknown;
+	};
+	const list = payload.mapped ?? [];
 	const rows: NewMessage[] = [];
 	let parsed = 0;
 
@@ -205,7 +228,15 @@ export async function backfillChannel(
 	}
 
 	const fetched = list.length;
-	if (rows.length === 0) return { fetched, parsed, withinWindow: 0, inserted: 0 };
+	// The shape report is only interesting when the mapping failed.
+	const sample = parsed === 0 ? payload.sample : undefined;
 
-	return { fetched, parsed, withinWindow: rows.length, inserted: await insertMessages(db, rows) };
+	if (rows.length === 0) return { fetched, parsed, withinWindow: 0, inserted: 0, sample };
+
+	return {
+		fetched,
+		parsed,
+		withinWindow: rows.length,
+		inserted: await insertMessages(db, rows),
+	};
 }
