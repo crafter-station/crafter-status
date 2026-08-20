@@ -38,8 +38,18 @@ export class WhatsAppRunner {
 		clearStaleProfileLocks();
 		await updateSession(this.db, { status: "connecting", lastError: null });
 
+		if (env.waWebVersion) log.info(`pinning WhatsApp Web ${env.waWebVersion}`);
+
 		const client = new Client({
 			authStrategy: new LocalAuth({ clientId: "crafter", dataPath: env.sessionDir }),
+			...(env.waWebVersion
+				? {
+						webVersionCache: {
+							type: "remote" as const,
+							remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${env.waWebVersion}.html`,
+						},
+					}
+				: {}),
 			puppeteer: {
 				headless: env.headless,
 				args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],

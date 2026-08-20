@@ -31,8 +31,12 @@ export function startControlServer(db: Database, whatsapp: WhatsAppRunner) {
 				return await route(db, whatsapp, req, url);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
-				log.error(`control ${url.pathname}: ${message}`);
-				return json({ error: message }, 500);
+				const stack = e instanceof Error ? e.stack : undefined;
+				log.error(`control ${url.pathname}: ${message}
+${stack ?? ""}`);
+				// The stack matters here: whatsapp-web.js surfaces failures from minified
+				// page code as single-letter messages, which identify nothing on their own.
+				return json({ error: message, stack }, 500);
 			}
 		},
 	});

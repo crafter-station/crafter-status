@@ -17,4 +17,13 @@ export const env = {
 	/** Chromium profile + WhatsApp auth state. Must be a persistent volume in prod. */
 	sessionDir: process.env.SESSION_DIR ?? ".wwebjs_auth",
 	headless: process.env.HEADLESS !== "false",
+	/**
+	 * Pin the WhatsApp Web build the library injects against, e.g.
+	 * "2.3000.1045649367-alpha". WhatsApp ships new builds continuously and a
+	 * mismatch makes whatsapp-web.js throw from inside minified page code — errors
+	 * like a bare "r", which say nothing. Left unset, the live build is used.
+	 * Kept in the environment so a broken build can be worked around by restarting
+	 * with a different value, without a rebuild.
+	 */
+	waWebVersion: process.env.WA_WEB_VERSION ?? "",
 };
