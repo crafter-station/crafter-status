@@ -147,12 +147,29 @@ Every command emits JSON when stdout is not a TTY, so it composes with `jq` and 
 
 ## Deployment
 
-Both apps ship with a Dockerfile. The ingestor **needs a persistent volume** at `/data` —
-losing it means scanning the QR again — and its control port must never be exposed publicly.
-The web app needs `NEXT_PUBLIC_*` values at build time, not just at runtime.
+Deployed on the Crafter Dokploy VPS, project `crafter-status`:
 
-Environment variables are listed in [.env.example](.env.example). Set `INGESTOR_TOKEN` to the
-same value on both services.
+| service | image | exposure |
+|---|---|---|
+| `crafter-status-web` | `apps/web/Dockerfile` | `https://wspstatus.crafter.run` |
+| `crafter-status-ingestor` | `apps/ingestor/Dockerfile` | none — internal only |
+
+The web app reaches the worker over the internal Docker network at
+`http://<ingestor-appName>:8787`, authenticated with `INGESTOR_TOKEN`. The control port is
+never published; the only way in from outside is the dashboard.
+
+Two things to know if you rebuild this elsewhere:
+
+- **The ingestor needs a persistent volume at `/data`.** Losing it means scanning the QR
+  again. On Dokploy this is a named volume mounted at `/data`, and `SESSION_DIR` points
+  inside it.
+- **The web image builds with Node, not Bun.** Bun installs (it owns `bun.lock` and the
+  workspace links), then Node builds and runs — `next build` under Bun fails loading Next's
+  precompiled server runtime. The Dockerfile explains it in place.
+
+`NEXT_PUBLIC_*` values are inlined at build time, so they are passed as build args as well as
+runtime env. Everything else is listed in [.env.example](.env.example); `INGESTOR_TOKEN` must
+match on both services.
 
 ## Data and privacy
 
