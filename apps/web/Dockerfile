@@ -1,5 +1,11 @@
-FROM oven/bun:1.2-debian AS builder
+# Bun installs (it owns bun.lock and the workspace links), Node builds and runs.
+#
+# `next build` under Bun dies collecting page data — Bun's CommonJS loader cannot
+# load Next's precompiled server runtime ("Expected CommonJS module to have a
+# function wrapper"). Node has no such problem, and node_modules is just files, so
+# the two runtimes hand off cleanly.
 
+FROM oven/bun:1.2-debian AS deps
 WORKDIR /app
 
 # Every workspace manifest, not just this app's: bun.lock describes the whole
@@ -15,6 +21,12 @@ COPY packages/db/package.json packages/db/
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN bun install --frozen-lockfile
 
+
+FROM node:22-bookworm-slim AS builder
+WORKDIR /app
+
+# node_modules plus the manifests and workspace symlinks bun created.
+COPY --from=deps /app ./
 COPY packages ./packages
 COPY apps/web ./apps/web
 
@@ -24,9 +36,11 @@ ARG NEXT_PUBLIC_APP_URL
 ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
 	NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 
-RUN bun run --cwd apps/web build
+WORKDIR /app/apps/web
+RUN node /app/node_modules/next/dist/bin/next build
 
-FROM oven/bun:1.2-debian AS runner
+
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
 	HOSTNAME=0.0.0.0 \
@@ -34,5 +48,6 @@ ENV NODE_ENV=production \
 
 COPY --from=builder /app ./
 
+WORKDIR /app/apps/web
 EXPOSE 3000
-CMD ["bun", "run", "--cwd", "apps/web", "start"]
+CMD ["node", "/app/node_modules/next/dist/bin/next", "start"]
