@@ -5,83 +5,94 @@ import type { WhatsAppClient } from "./whatsapp.ts";
 
 type WaMessage = wwebjs.Message;
 
+/** Raw serialized message as WhatsApp Web's own store holds it. */
+type RawMessage = {
+	id?: { _serialized?: string; fromMe?: boolean };
+	from?: string;
+	to?: string;
+	author?: string;
+	notifyName?: string;
+	body?: string;
+	caption?: string;
+	type?: string;
+	t?: number;
+	hasMedia?: boolean;
+	quotedStanzaID?: string;
+};
+
 /**
- * Display names cost a round trip to the WhatsApp store each time, and a busy group
- * repeats the same handful of senders all day. Cached for the process lifetime;
- * a rename shows up after the next restart, which is an acceptable trade.
+ * Which group a message belongs to, without asking for a chat model.
+ *
+ * `getChat()` builds a full model, and on a profile with damaged chats that
+ * throws — the same DataError that hid the group list. The routing information
+ * is already on the message: for an incoming message `from` is the group, and
+ * for one we sent it is `to`.
  */
-const nameCache = new Map<string, string | null>();
-
-async function resolveAuthorName(message: WaMessage): Promise<string | null> {
-	const jid = message.author ?? message.from;
-	if (!jid) return null;
-
-	const cached = nameCache.get(jid);
-	if (cached !== undefined) return cached;
-
-	let name: string | null = null;
-	try {
-		const contact = await message.getContact();
-		name = contact.pushname || contact.name || contact.number || null;
-	} catch {
-		name = null;
-	}
-
-	nameCache.set(jid, name);
-	return name;
+function channelIdOf(message: { from?: string; to?: string; fromMe?: boolean }): string | null {
+	const jid = message.fromMe ? message.to : message.from;
+	return jid?.endsWith("@g.us") ? jid : null;
 }
 
-async function toRow(message: WaMessage, channelId: string): Promise<NewMessage> {
-	return {
-		id: message.id._serialized,
-		channelId,
-		authorJid: message.author ?? message.from ?? null,
-		authorName: await resolveAuthorName(message),
-		body: message.body ?? "",
-		type: message.type ?? "chat",
-		hasMedia: Boolean(message.hasMedia),
-		// whatsapp-web.js reports seconds since epoch.
-		timestamp: new Date(message.timestamp * 1000),
-		fromMe: Boolean(message.fromMe),
-		quotedMessageId: message.hasQuotedMsg
-			? ((message as unknown as { _data?: { quotedStanzaID?: string } })._data?.quotedStanzaID ??
-				null)
-			: null,
-	};
+function bodyOf(message: { body?: string; caption?: string }): string {
+	return message.body || message.caption || "";
 }
 
 /**
  * Live path: one message off the socket. Untracked groups are catalogued by name
  * and id only — their content is never written.
+ *
+ * Reads only fields already present on the message. The display name comes from
+ * `notifyName`, which WhatsApp attaches to the message itself, rather than from
+ * `getContact()` — another model build that fails on damaged profiles, and a round
+ * trip per message besides.
  */
 export async function ingestMessage(db: Database, message: WaMessage): Promise<void> {
-	const chat = await message.getChat();
-	if (!chat.isGroup) return;
+	const raw = (message as unknown as { _data?: RawMessage })._data ?? {};
 
-	const channelId = chat.id._serialized;
+	const channelId = channelIdOf({
+		from: message.from,
+		to: message.to,
+		fromMe: message.fromMe,
+	});
+	if (!channelId) return;
+
 	const channel = await getChannel(db, channelId);
 
 	if (!channel) {
-		const group = chat as typeof chat & { participants?: unknown[] };
-		await upsertChannels(db, [
-			{
-				id: channelId,
-				name: chat.name,
-				participantCount: Array.isArray(group.participants) ? group.participants.length : 0,
-			},
-		]);
+		// A group we have never seen. Catalogue the id so it appears in settings;
+		// the name arrives with the next catalogue refresh.
+		await upsertChannels(db, [{ id: channelId, name: channelId, participantCount: 0 }]);
 		return;
 	}
 
 	if (!channel.tracked) return;
 
-	await insertMessages(db, [await toRow(message, channelId)]);
+	await insertMessages(db, [
+		{
+			id: message.id._serialized,
+			channelId,
+			authorJid: message.author ?? message.from ?? null,
+			authorName: raw.notifyName ?? null,
+			body: message.body ?? "",
+			type: message.type ?? "chat",
+			hasMedia: Boolean(message.hasMedia),
+			// whatsapp-web.js reports seconds since epoch.
+			timestamp: new Date(message.timestamp * 1000),
+			fromMe: Boolean(message.fromMe),
+			quotedMessageId: raw.quotedStanzaID ?? null,
+		},
+	]);
 }
 
 /**
  * History path: used when a channel is first tracked and again after every
  * reconnect. Bounded by the configured message limit and day window, since
  * WhatsApp Web only ever synced a recent slice of history to this profile anyway.
+ *
+ * This is `Chat.fetchMessages` inlined. The library's version is safe in itself —
+ * it reads the chat with `getAsModel: false` — but reaching it requires
+ * `getChatById()`, which builds the model that throws on damaged chats. Going
+ * straight to the store skips that.
  */
 export async function backfillChannel(
 	db: Database,
@@ -89,16 +100,62 @@ export async function backfillChannel(
 	channelId: string,
 ): Promise<number> {
 	const settings = await getSettings(db);
-	const chat = await client.getChatById(channelId);
-	if (!chat.isGroup) return 0;
+	const page = (
+		client as unknown as {
+			pupPage: { evaluate: <T>(fn: (...a: any[]) => T, ...args: any[]) => Promise<T> };
+		}
+	).pupPage;
+
+	const raw = await page.evaluate(
+		async (chatId: string, limit: number) => {
+			const win = (globalThis as unknown as { window: Record<string, any> }).window;
+			const keep = (m: any) => !m.isNotification;
+
+			const chat = await win.WWebJS.getChat(chatId, { getAsModel: false });
+			let msgs: any[] = chat.msgs.getModelsArray().filter(keep);
+
+			while (msgs.length < limit) {
+				const earlier = await win.require("WAWebChatLoadMessages").loadEarlierMsgs({ chat });
+				if (!earlier || !earlier.length) break;
+				msgs = [...earlier.filter(keep), ...msgs];
+			}
+
+			msgs.sort((a, b) => (a.t > b.t ? 1 : -1));
+			if (msgs.length > limit) msgs = msgs.slice(msgs.length - limit);
+
+			return msgs.map((m) => {
+				try {
+					return win.WWebJS.getMessageModel(m);
+				} catch {
+					// One unserializable message must not cost us the rest of the history.
+					return null;
+				}
+			});
+		},
+		channelId,
+		settings.backfillMessageLimit,
+	);
 
 	const cutoff = Date.now() - settings.backfillDays * 24 * 60 * 60 * 1000;
-	const raw = await chat.fetchMessages({ limit: settings.backfillMessageLimit });
-
 	const rows: NewMessage[] = [];
-	for (const message of raw) {
-		if (message.timestamp * 1000 < cutoff) continue;
-		rows.push(await toRow(message, channelId));
+
+	for (const m of (raw ?? []) as (RawMessage | null)[]) {
+		if (!m?.id?._serialized || typeof m.t !== "number") continue;
+		const timestamp = m.t * 1000;
+		if (timestamp < cutoff) continue;
+
+		rows.push({
+			id: m.id._serialized,
+			channelId,
+			authorJid: m.author ?? m.from ?? null,
+			authorName: m.notifyName ?? null,
+			body: bodyOf(m),
+			type: m.type ?? "chat",
+			hasMedia: Boolean(m.hasMedia),
+			timestamp: new Date(timestamp),
+			fromMe: Boolean(m.id.fromMe),
+			quotedMessageId: m.quotedStanzaID ?? null,
+		});
 	}
 
 	if (rows.length === 0) return 0;
