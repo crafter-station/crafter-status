@@ -11,6 +11,13 @@ import {
 import { env } from "./env.ts";
 import { log } from "./log.ts";
 
+/** "51987654321@c.us" -> "+51987654321". Null when there is nothing usable. */
+function phoneOf(jid: string | null): string | null {
+	if (!jid) return null;
+	const user = jid.split("@")[0]?.split(":")[0];
+	return user && /^\d{6,}$/.test(user) ? `+${user}` : null;
+}
+
 export type GenerateArgs = {
 	channelId: string;
 	day: string;
@@ -38,7 +45,11 @@ export async function generateSummary(db: Database, args: GenerateArgs): Promise
 			messages: rows.map((m) => ({
 				id: m.id,
 				timestamp: m.timestamp,
-				authorName: m.authorName,
+				// A sender WhatsApp has no contact name for is still a distinct person.
+				// Falling back to their number keeps them apart in the transcript, so
+				// the model can still attribute a decision or an action item; "unknown"
+				// for everyone would silently merge them into one voice.
+				authorName: m.authorName ?? phoneOf(m.authorJid),
 				body: m.body,
 				type: m.type,
 				hasMedia: m.hasMedia,
