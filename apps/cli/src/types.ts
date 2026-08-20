@@ -1,6 +1,8 @@
 export type Config = {
-	openaiApiKey: string;
-	model: string;
+	/** Origin of the Crafter Status deployment, e.g. https://wspstatus.crafter.run */
+	apiUrl: string;
+	/** Personal token minted in the dashboard (crft_…). */
+	token: string;
 };
 
 export type GlobalFlags = {
@@ -12,23 +14,3 @@ export type GlobalFlags = {
 };
 
 export type OutputMode = "json" | "human";
-
-export type GroupSummary = {
-	id: string;
-	name: string;
-	participantCount: number;
-};
-
-export type GroupMessage = {
-	id: string;
-	timestamp: number;
-	from: string;
-	author: string | null;
-	body: string;
-	type: string;
-};
-
-export type GroupTranscript = {
-	group: GroupSummary;
-	messages: GroupMessage[];
-};

@@ -1,0 +1,17 @@
+{
+	"name": "@crafter/core",
+	"version": "0.2.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./types": "./src/types.ts",
+		"./load-env": "./src/load-env.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"openai": "^6.9.0"
+	}
+}

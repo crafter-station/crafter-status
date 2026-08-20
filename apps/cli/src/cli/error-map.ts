@@ -19,52 +19,51 @@ export class AppError extends Error {
 	}
 
 	toJSON() {
-		return {
-			ok: false,
-			code: this.code,
-			error: this.human,
-			hint: this.hint,
-		};
+		return { ok: false, code: this.code, error: this.human, hint: this.hint };
 	}
 }
 
 export function mapError(error: unknown): AppError {
 	if (error instanceof AppError) return error;
+
 	if (error instanceof Error) {
 		const msg = error.message;
-		if (msg.includes("Evaluation failed") || msg.includes("Protocol error")) {
+
+		if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED")) {
 			return new AppError(
-				"WHATSAPP_BROWSER_ERROR",
+				"UNREACHABLE",
 				{
-					human: "WhatsApp Web browser session failed.",
-					hint: "Try `crafter logout` to clear state, then `crafter login` to pair again.",
-					exitCode: 5,
+					human: "Could not reach the Crafter Status server.",
+					hint: "Check `crafter config show`, or the deployment may be down.",
+					exitCode: 7,
 				},
 				error,
 			);
 		}
-		if (msg.includes("ENOENT") && msg.includes("chrome")) {
+		if (msg.includes("401") || msg.includes("Unauthorized")) {
 			return new AppError(
-				"CHROMIUM_MISSING",
+				"UNAUTHORIZED",
 				{
-					human: "Chromium not found.",
-					hint: "Run `bunx puppeteer browsers install chrome` to install it.",
-					exitCode: 6,
+					human: "Your token was rejected.",
+					hint: "Mint a new token in Settings → MCP endpoint, then run `crafter login`.",
+					exitCode: 4,
 				},
 				error,
 			);
 		}
-		if (msg.includes("401") || msg.includes("Incorrect API key")) {
+		if (msg.includes("not an active member")) {
 			return new AppError(
-				"OPENAI_UNAUTHORIZED",
+				"FORBIDDEN",
 				{
-					human: "OpenAI rejected the API key.",
-					hint: "Run `crafter config set` to update it.",
+					human: "Your GitHub account is not an active member of the organization.",
+					exitCode: 3,
 				},
 				error,
 			);
 		}
+
 		return new AppError("UNKNOWN", { human: msg }, error);
 	}
+
 	return new AppError("UNKNOWN", { human: String(error) });
 }

@@ -18,9 +18,7 @@ export function table(
 		return;
 	}
 
-	const headerLine = columns
-		.map((col) => pc.bold(col.label.padEnd(col.width ?? 20)))
-		.join("  ");
+	const headerLine = columns.map((col) => pc.bold(col.label.padEnd(col.width ?? 20))).join("  ");
 	process.stdout.write(`  ${headerLine}\n`);
 
 	const sep = columns.map((col) => "─".repeat(col.width ?? 20)).join("──");

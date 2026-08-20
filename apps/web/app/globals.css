@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+	--font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+	--font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", monospace;
+}
+
+:root {
+	--bg: oklch(99% 0 0);
+	--panel: oklch(100% 0 0);
+	--border: oklch(90% 0.004 260);
+	--fg: oklch(20% 0.01 260);
+	--muted: oklch(52% 0.012 260);
+	--accent: oklch(58% 0.16 155);
+	--danger: oklch(58% 0.19 25);
+	--warn: oklch(70% 0.15 75);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: oklch(17% 0.008 260);
+		--panel: oklch(21% 0.009 260);
+		--border: oklch(30% 0.01 260);
+		--fg: oklch(94% 0.004 260);
+		--muted: oklch(66% 0.012 260);
+		--accent: oklch(72% 0.16 155);
+		--danger: oklch(66% 0.18 25);
+		--warn: oklch(78% 0.14 75);
+	}
+}
+
+body {
+	background: var(--bg);
+	color: var(--fg);
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+}
+
+/* Summary bodies are model-authored markdown; style them once, here. */
+.prose-summary {
+	font-size: 0.875rem;
+	line-height: 1.65;
+}
+.prose-summary h2 { display: none; }
+.prose-summary h3 {
+	font-family: var(--font-mono);
+	font-size: 0.6875rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin: 1.25rem 0 0.375rem;
+}
+.prose-summary ul { margin: 0.25rem 0; padding-left: 1rem; list-style: disc; }
+.prose-summary li { margin: 0.2rem 0; }
+.prose-summary p { margin: 0.5rem 0; }
+.prose-summary a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose-summary strong { font-weight: 600; }
+.prose-summary em { color: var(--muted); font-style: normal; font-size: 0.8125rem; }

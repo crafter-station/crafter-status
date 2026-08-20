@@ -1,6 +1,19 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.4.12/schema.json",
-	"linter": { "enabled": true, "rules": { "recommended": true } },
+	"$schema": "https://biomejs.dev/schemas/2.5.9/schema.json",
+	"files": {
+		"includes": [
+			"**",
+			"!**/node_modules",
+			"!**/.next",
+			"!**/dist",
+			"!packages/db/drizzle",
+			"!.agents",
+			"!.claude",
+			"!bun.lock",
+			"!apps/web/app/globals.css"
+		]
+	},
+	"linter": { "enabled": true, "rules": { "preset": "recommended" } },
 	"formatter": { "enabled": true, "indentStyle": "tab", "lineWidth": 100 },
 	"javascript": { "formatter": { "quoteStyle": "double" } },
 	"assist": { "actions": { "source": { "organizeImports": "on" } } }
