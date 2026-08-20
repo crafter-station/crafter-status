@@ -1,0 +1,38 @@
+{
+	"name": "@crafter/web",
+	"version": "0.2.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "next dev --port 3000",
+		"build": "next build",
+		"start": "next start",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@clerk/mcp-tools": "^0.6.0",
+		"@clerk/nextjs": "^7.7.9",
+		"@crafter/core": "workspace:*",
+		"@crafter/db": "workspace:*",
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"class-variance-authority": "^0.7.1",
+		"clsx": "^2.1.1",
+		"lucide-react": "^0.550.0",
+		"mcp-handler": "^2.1.1",
+		"next": "^16.3.1",
+		"qrcode": "^1.5.4",
+		"react": "^19.2.0",
+		"react-dom": "^19.2.0",
+		"react-markdown": "^10.1.0",
+		"tailwind-merge": "^3.3.1",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@tailwindcss/postcss": "^4.3.3",
+		"@types/node": "^22.10.0",
+		"@types/qrcode": "^1.5.5",
+		"@types/react": "^19.2.0",
+		"@types/react-dom": "^19.2.0",
+		"tailwindcss": "^4.3.3"
+	}
+}

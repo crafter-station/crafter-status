@@ -1,0 +1,25 @@
+{
+	"name": "@crafter/db",
+	"version": "0.2.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./schema": "./src/schema.ts"
+	},
+	"scripts": {
+		"generate": "drizzle-kit generate",
+		"push": "drizzle-kit push",
+		"migrate": "drizzle-kit migrate",
+		"studio": "drizzle-kit studio",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@crafter/core": "workspace:*",
+		"drizzle-orm": "^0.45.2",
+		"postgres": "^3.4.9"
+	},
+	"devDependencies": {
+		"drizzle-kit": "^0.31.10"
+	}
+}

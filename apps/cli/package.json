@@ -1,0 +1,21 @@
+{
+	"name": "@crafter/cli",
+	"version": "0.2.0",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"crafter": "bin/crafter.ts"
+	},
+	"scripts": {
+		"dev": "bun run bin/crafter.ts",
+		"build": "bun build ./bin/crafter.ts --target=bun --outdir=dist",
+		"compile": "bun build ./bin/crafter.ts --compile --outfile=dist/crafter",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@clack/prompts": "^1.1.0",
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"commander": "^14.0.0",
+		"picocolors": "^1.1.1"
+	}
+}
